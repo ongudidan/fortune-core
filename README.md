@@ -18,16 +18,17 @@ Every module can be independently enabled or disabled via feature toggles in `co
 - [Installation & Setup](#-installation--setup)
 - [Configuration & Feature Toggles](#-configuration--feature-toggles)
 - [Database Migrations & Seeders](#-database-migrations--seeders)
-- [Module In-Depth Documentation](#-module-in-depth-documentation)
+- [Module In-Depth Documentation & How-To-Use Guides](#-module-in-depth-documentation--how-to-use-guides)
   - [1. Security & Multi-2FA](#1-security--multi-2fa)
-  - [2. Payments & Cash Vaults](#2-payments--cash-vaults)
+  - [2. Payments, Cash Drawers & Cash Vaults](#2-payments-cash-drawers--cash-vaults)
   - [3. Customer & Supplier Wallets](#3-customer--supplier-wallets)
-  - [4. Inter-Account Transfers](#4-inter-account-transfers)
-  - [5. M-Pesa Daraja Engine](#5-m-pesa-daraja-engine)
+  - [4. Inter-Account Transfers & Maker-Checker](#4-inter-account-transfers--maker-checker)
+  - [5. M-Pesa Daraja Automation Engine](#5-m-pesa-daraja-automation-engine)
   - [6. Double-Entry General Ledger](#6-double-entry-general-ledger)
   - [7. Bulk & System Transactional SMS](#7-bulk--system-transactional-sms)
   - [8. Financial & Reconciliation Reports](#8-financial--reconciliation-reports)
   - [9. Wholesale & FMCG Inventory Engine](#9-wholesale--fmcg-inventory-engine)
+  - [10. Frontend Vue 3 / Inertia Components Integration](#10-frontend-vue-3--inertia-components-integration)
 - [Frontend Components (Vue 3 / Inertia)](#-frontend-components-vue-3--inertia)
 - [Console Commands & Schedulers](#-console-commands--schedulers)
 - [Testing](#-testing)
@@ -231,98 +232,282 @@ All migrations use the configurable table prefix (`fc_` by default):
 
 ---
 
-## 🔍 Module In-Depth Documentation
+## 🔍 Module In-Depth Documentation & How-To-Use Guides
+
+Every module in **Fortune Core** is self-contained, enterprise-tested, and feature-toggled via `config('fortune.modules.*')`. Below are practical code examples and workflows for each module.
+
+---
 
 ### 1. Security & Multi-2FA
-Directly integrates `ongudidan/laravel-multi-2fa`. Provides WebAuthn Passkeys, TOTP Authenticator apps (Google Authenticator, Microsoft Authenticator), and Email OTP challenge modals.
+Directly integrates [`ongudidan/laravel-multi-2fa`](https://packagist.org/packages/ongudidan/laravel-multi-2fa) to provide WebAuthn Passkeys (biometric/hardware keys), TOTP Authenticator apps (Google / Microsoft Authenticator), and Email OTP.
 
-### 2. Payments & Cash Vaults
-- **Denomination Healing**:
-  Compares physical cash denomination counts (`SUM(denomination * quantity)`) with the ledger balance and records reconciliation adjustments.
-
+#### User Model Setup:
 ```php
-use Ongudidan\FortuneCore\Modules\Payments\Services\PaymentAccountService;
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Ongudidan\Multi2fa\Traits\HasMulti2fa;
 
-$service = app(PaymentAccountService::class);
-$result = $service->healDenominationBalance($vaultAccount);
-
-if ($result['is_reconciled']) {
-    // Vault matches physical drawer count exactly
-} else {
-    // Discrepancy detected: $result['status'] ('overage' or 'shortage')
-    // Discrepancy amount: $result['discrepancy']
+class User extends Authenticatable
+{
+    use HasMulti2fa;
 }
 ```
 
-- **Cheque Payout Clearance**:
-  Defers GL balance deductions and journal entries until a physical collector is assigned and the bank reference clears.
+#### Triggering 2FA Challenge on Login or Sensitive Operations:
+```php
+use Illuminate\Support\Facades\Auth;
 
+// Inside login controller or checkout step
+if (Auth::user()->hasTwoFactorEnabled()) {
+    session()->put('2fa.prompt_required', true);
+    return redirect()->route('two-factor.challenge');
+}
+```
+
+#### In Inertia Vue 3 Pages:
+```vue
+<script setup lang="ts">
+import TwoFactorChallengeModal from '@/components/fortune/TwoFactorChallengeModal.vue';
+import PasskeyManager from '@/components/fortune/PasskeyManager.vue';
+</script>
+
+<template>
+    <!-- Modal prompt when user logs in -->
+    <TwoFactorChallengeModal :open="showChallengeModal" @success="onTwoFactorVerified" />
+
+    <!-- Passkeys management tab in user profile -->
+    <PasskeyManager :passkeys="userPasskeys" />
+</template>
+```
+
+---
+
+### 2. Payments, Cash Drawers & Cash Vaults
+Manage physical vaults, petty cash drawers, bank accounts, and mobile till/paybill balances with real-time running balances and physical denomination reconciliation.
+
+#### Creating a Payment Account:
+```php
+use Ongudidan\FortuneCore\Modules\Payments\Models\PaymentAccount;
+
+$vault = PaymentAccount::create([
+    'name' => 'Main Headquarter Vault',
+    'type' => 'vault',
+    'currency' => 'KES',
+    'balance' => 250000.00,
+    'has_denominations' => true,
+    'is_active' => true,
+]);
+```
+
+#### Cash Drawer Operations (Opening Float & Shift Close):
+```php
+use Ongudidan\FortuneCore\Modules\Payments\Services\CashDrawerService;
+
+$drawerService = app(CashDrawerService::class);
+
+// 1. Issue opening float from Vault to Cash Drawer 1
+$session = $drawerService->openShift(
+    drawerAccountId: $drawerId,
+    cashierUserId: $cashierId,
+    openingFloat: 5000.00,
+    sourceVaultAccountId: $vaultId
+);
+
+// 2. Close shift and reconcile physical cash vs expected ledger sales
+$reconciliation = $drawerService->closeShift(
+    sessionId: $session->id,
+    actualCashCounted: 48500.00,
+    notes: 'Shift completed. Discrepancy: KES 0.00'
+);
+```
+
+#### Vault Physical Denomination Healing (`healDenominationBalance`):
+Cross-examines physical denomination note/coin counts (`SUM(denomination * quantity)`) against the account's ledger balance and flags overages or shortages:
+```php
+use Ongudidan\FortuneCore\Modules\Payments\Services\PaymentAccountService;
+
+$paymentService = app(PaymentAccountService::class);
+
+// Provide explicit physical note counts: [denomination_id => quantity]
+$result = $paymentService->healDenominationBalance($vaultAccount, [
+    1 => 50, // 50 notes of 1000 = 50,000
+    2 => 40, // 40 notes of 500  = 20,000
+]);
+
+if ($result['is_reconciled']) {
+    // Physical vault matches ledger balance perfectly
+} else {
+    // Discrepancy detected: $result['status'] ('shortage' or 'overage')
+    // Difference: $result['discrepancy']
+    // Automatically creates a pending PaymentAccountAdjustment record
+}
+```
+
+#### Deferred Cheque Payout Life Cycle:
+In compliance with accounting standards, cheques do **not** deduct bank balances or post GL entries until a collector is assigned and the cheque transaction clears with a bank reference.
 ```php
 use Ongudidan\FortuneCore\Modules\Payments\Services\ChequeClearanceService;
 
 $chequeService = app(ChequeClearanceService::class);
 
-// Step 1: Assign collector (no GL entries yet)
-$chequeService->assignCollector($chequeId, 'John Doe', 'ID-123456');
+// Stage 1: Issue Cheque Transaction (status is 'pending', no GL postings yet)
+$chequeTx = $chequeService->issueCheque([
+    'payment_account_id' => $bankAccountId,
+    'cheque_number' => 'CHQ-778899',
+    'amount' => 120000.00,
+    'payee_name' => 'Crown Paints Kenya PLC',
+]);
 
-// Step 2: Clear cheque with bank transaction reference
-$chequeService->clearCheque($chequeId, 'BANK-REF-998822');
+// Stage 2: Assign physical cheque collector
+$chequeService->assignCollector(
+    chequeId: $chequeTx->id,
+    collectorName: 'Peter Kamau',
+    collectorIdNumber: '24119988'
+);
+
+// Stage 3: Bank clears cheque with transaction reference
+// This step decrements the bank balance and posts double-entry GL items atomically
+$chequeService->clearCheque(
+    chequeId: $chequeTx->id,
+    bankReference: 'EFT-NBO-882299'
+);
 ```
 
-### 3. Customer & Supplier Wallets
-- **Customer Escrow (GL 2015)**: Records customer deposits and wallet usage.
-- **Supplier Advances (GL 1050)**: Records supplier prepayments and offsets against bills.
+---
 
+### 3. Customer & Supplier Wallets
+Track customer escrow prepayments (`GL 2015`) and supplier advance payments (`GL 1050`) with double-entry running balances.
+
+#### Customer Wallet Top-Up (Escrow Liability 2015):
 ```php
 use Ongudidan\FortuneCore\Modules\Wallets\Services\WalletService;
 
 $walletService = app(WalletService::class);
 
-// Credit customer wallet with KES 5,000 from M-Pesa Till
-$walletService->creditCustomerWallet(
-    customerId: 42,
-    amount: 5000.00,
+// Customer deposits KES 10,000 into wallet via M-Pesa Till
+$walletTx = $walletService->creditCustomerWallet(
+    customerId: 15,
+    amount: 10000.00,
     paymentAccountId: $tillAccountId,
-    reference: 'MPESA-REF-123'
+    reference: 'QW99881122',
+    description: 'Wallet advance top-up'
 );
 
-// Check running wallet balance
-$balance = $walletService->getCustomerBalance(42); // 5000.00
+// Check current running wallet balance
+$balance = $walletService->getCustomerBalance(15); // 10000.00
 ```
 
-### 4. Inter-Account Transfers
-Provides maker-checker approvals, automated fee booking (`GL 6000`), and idempotency checks to prevent duplicate transfers.
+#### Deducting Customer Wallet at Checkout / Invoice Settlement:
+```php
+// Deduct KES 4,500 from customer wallet to settle sales invoice #1024
+$walletService->debitCustomerWallet(
+    customerId: 15,
+    amount: 4500.00,
+    reference: 'INV-1024',
+    description: 'Payment for Invoice #1024'
+);
+
+$remaining = $walletService->getCustomerBalance(15); // 5500.00
+```
+
+#### Supplier Advance Prepayments (Asset 1050):
+```php
+// Advance KES 50,000 to supplier before goods arrival
+$walletService->creditSupplierWallet(
+    supplierId: 8,
+    amount: 50000.00,
+    paymentAccountId: $bankAccountId,
+    reference: 'ADV-SUPP-008'
+);
+
+// Check supplier prepaid advance balance
+$advBalance = $walletService->getSupplierBalance(8); // 50000.00
+```
+
+---
+
+### 4. Inter-Account Transfers & Maker-Checker
+Transfer money between internal accounts (Vault $\rightarrow$ Bank, Till $\rightarrow$ Bank) with automated fee booking to `GL 6000` (Transaction Charges) and maker-checker approval controls.
 
 ```php
 use Ongudidan\FortuneCore\Modules\Transfers\Services\PaymentAccountTransferService;
 
 $transferService = app(PaymentAccountTransferService::class);
 
-// Step 1: Initiate transfer from Cash Vault to Bank
+// Step 1: Cashier initiates transfer from Vault to Bank
 $transfer = $transferService->initiateTransfer([
-    'from_account_id' => $vaultId,
-    'to_account_id' => $bankId,
+    'from_account_id' => $vaultAccountId,
+    'to_account_id' => $bankAccountId,
     'amount' => 150000.00,
     'transfer_fee' => 150.00,
-    'reference' => 'TX-2026-001',
+    'reference' => 'CIT-SEC-9921',
+    'notes' => 'CIT cash collection to Equity Bank',
 ]);
 
-// Step 2: Approve transfer (posts double-entry GL items atomically)
-$transferService->approveTransfer($transfer->id);
+// Step 2: Financial controller reviews and approves
+// Posts double-entry GL items atomically:
+//   Debit Bank Account (1010) = 150,000
+//   Debit Bank Charges (6000) = 150
+//   Credit Vault Account (1001) = 150,150
+$transferService->approveTransfer($transfer->id, approverUserId: auth()->id());
 ```
 
-### 5. M-Pesa Daraja Engine
-- **Live STK Push**: Triggers instant Daraja push to customer mobile phone.
-- **C2B Webhook Confirmation**: 3-Tier automatic reconciliation:
-  1. **Tier 1 (Exact Invoice Match)**: Settles invoice directly.
-  2. **Tier 2 (Customer Phone Match)**: Credits customer wallet (`GL 2015`).
-  3. **Tier 3 (Suspense Fallback)**: Credits Unallocated Suspense (`GL 2016`).
-- **Auto-Sweep**: Scheduled sweeps from Till/Paybill to corporate bank account.
-- **Auto-Pull**: Scheduled pulls from Daraja API for missed webhook reconciliation.
+---
+
+### 5. M-Pesa Daraja Automation Engine
+Complete integration with Safaricom Daraja API for live STK Push, C2B webhooks with 3-tier intelligent reconciliation, auto-sweeps, and auto-pulls.
+
+#### Live STK Push Prompt:
+```php
+use Ongudidan\FortuneCore\Modules\Mpesa\Services\MpesaTransactionService;
+
+$mpesaService = app(MpesaTransactionService::class);
+
+$response = $mpesaService->initiateStkPush(
+    phone: '254712345678',
+    amount: 1500.00,
+    accountReference: 'INV-2048',
+    transactionDesc: 'Payment for Invoice #2048'
+);
+
+if ($response['success']) {
+    // STK prompt successfully delivered to customer phone
+    $checkoutRequestId = $response['checkout_request_id'];
+}
+```
+
+#### C2B Webhook Confirmation & 3-Tier Intelligent Matching:
+When Safaricom sends a C2B confirmation webhook payload:
+```php
+// In your controller or WebhookController
+$payload = $request->all();
+$transaction = $mpesaService->handleC2bConfirmation($payload);
+```
+**The 3-Tier Reconciliation Algorithm executes atomically:**
+1. **Tier 1 (Exact Invoice Match):**
+   Matches `BillRefNumber` against unpaid invoices. If matched, settles invoice and marks transaction `allocated`.
+2. **Tier 2 (Customer Phone Match):**
+   If no invoice matches, matches `MSISDN` against customer telephone numbers. If matched, credits customer wallet (`GL 2015`) and marks transaction `allocated`.
+3. **Tier 3 (Suspense Fallback):**
+   If both fail, funds are safely credited to Unallocated Suspense (`GL 2016`), ready for manual resolution via `UnallocatedPaymentsTable.vue`.
+
+#### Automated Schedulers:
+In `routes/console.php` or `app/Console/Kernel.php`:
+```php
+use Illuminate\Support\Facades\Schedule;
+
+// Pull missed transactions from Daraja every 15 minutes
+Schedule::command('mpesa:auto-pull')->everyFifteenMinutes();
+
+// Auto-sweep daily earnings from Paybill/Till to corporate bank at 23:00
+Schedule::command('mpesa:auto-sweep')->dailyAt('23:00');
+```
+
+---
 
 ### 6. Double-Entry General Ledger
-Guarantees mathematical equality (`sum(debits) === sum(credits)`). Throws `UnbalancedJournalException` if unbalanced.
+Guarantees mathematical equality ($\sum \text{Debits} \equiv \sum \text{Credits}$). If debits and credits do not balance, it immediately throws `UnbalancedJournalException`.
 
+#### Posting Multi-Line Journal Entries:
 ```php
 use Ongudidan\FortuneCore\Modules\Ledger\Services\AccountingService;
 
@@ -330,92 +515,283 @@ $accounting = app(AccountingService::class);
 
 $entry = $accounting->postJournalEntry([
     'entry_date' => now()->toDateString(),
-    'reference' => 'POS-SALE-001',
-    'description' => 'Retail Cash Sale',
+    'reference' => 'SAL-2026-001',
+    'description' => 'Staff Salaries Payout',
     'items' => [
-        ['account_code' => '1001', 'debit' => 2500.00, 'credit' => 0.00, 'description' => 'Cash in Hand'],
-        ['account_code' => '4000', 'debit' => 0.00, 'credit' => 2500.00, 'description' => 'Sales Revenue'],
+        [
+            'account_code' => '5100', // Salary Expense
+            'debit' => 450000.00,
+            'credit' => 0.00,
+            'description' => 'Gross salaries',
+        ],
+        [
+            'account_code' => '1010', // Operating Bank Account
+            'debit' => 0.00,
+            'credit' => 450000.00,
+            'description' => 'Direct bank transfer payout',
+        ],
     ],
 ]);
 ```
 
-### 7. Bulk & System Transactional SMS
-- **TextSMS Driver**: Integrated with TextSMS API.
-- **Automated Lifecycle Hooks**: Automatically sends transactional SMS on M-Pesa payment reception and wallet top-ups.
-- **Dynamic Variable Substitution**: Replaces `{customer_name}`, `{amount}`, `{reference}`, `{balance}` dynamically.
+#### Calculating Running Balances:
+```php
+use Ongudidan\FortuneCore\Modules\Ledger\Services\LedgerService;
 
+$ledger = app(LedgerService::class);
+
+$history = $ledger->getAccountLedger(accountCode: '1001', fromDate: '2026-01-01');
+$currentBalance = $ledger->getRunningBalance(accountCode: '1001');
+```
+
+---
+
+### 7. Bulk & System Transactional SMS
+Send transactional SMS via TextSMS API gateway with automatic variable interpolation, scheduled campaigns, and delivery report tracking.
+
+#### Sending a Single Transactional SMS:
 ```php
 use Ongudidan\FortuneCore\Modules\Sms\Services\SmsService;
 
 $sms = app(SmsService::class);
 
 $sms->sendSingle(
-    phone: '254712345678',
-    message: 'Dear Alice, your payment of KES 5,000 has been received.',
-    templateSlug: 'payment_received'
+    phone: '254711223344',
+    message: 'Hello {customer_name}, your order #{order_no} has been dispatched.',
+    variables: [
+        'customer_name' => 'Alice Mwangi',
+        'order_no' => 'ORD-9912',
+    ]
 );
 ```
 
+#### Automated Cross-Module Hooks:
+When enabled, SMS notifications fire automatically on:
+- Customer wallet credit (notifies customer of top-up and new balance)
+- M-Pesa transaction received
+- Low stock threshold reached
+
+#### Creating Scheduled Campaigns:
+```php
+$campaign = $sms->createCampaign([
+    'name' => 'End of Month Wholesale Promo',
+    'message' => 'Dear Customer, enjoy 5% discount on cooking oil bales this weekend!',
+    'recipients' => ['254711223344', '254722334455', '254733445566'],
+    'scheduled_at' => now()->addHours(2),
+]);
+```
+
+---
+
 ### 8. Financial & Reconciliation Reports
-- `GeneralLedgerReportService`
-- `TrialBalanceReportService`
-- `BalanceSheetReportService`
-- `IncomeStatementReportService`
-- `UnallocatedSuspenseReportService`
-- `VaultAuditReportService`
-- `CashDrawerReconciliationReportService`
-- `InterAccountTransferAuditService`
-- `SellPaymentReportService`
-- `FinancialSummaryReportService`
+Run 10 specialized financial statements and audit services directly:
+
+```php
+use Ongudidan\FortuneCore\Modules\Reports\Services\TrialBalanceReportService;
+use Ongudidan\FortuneCore\Modules\Reports\Services\BalanceSheetReportService;
+use Ongudidan\FortuneCore\Modules\Reports\Services\ProfitLossReportService;
+use Ongudidan\FortuneCore\Modules\Reports\Services\VaultAuditReportService;
+
+// 1. Trial Balance Statement
+$trialBalance = app(TrialBalanceReportService::class)->generate(asOfDate: '2026-12-31');
+
+// 2. Balance Sheet Statement
+$balanceSheet = app(BalanceSheetReportService::class)->generate(asOfDate: '2026-12-31');
+
+// 3. Profit & Loss Statement
+$pnl = app(ProfitLossReportService::class)->generate(startDate: '2026-01-01', endDate: '2026-12-31');
+
+// 4. Physical Vault Audit
+$vaultAudit = app(VaultAuditReportService::class)->generate(vaultAccountId: $vaultId);
+```
+
+---
 
 ### 9. Wholesale & FMCG Inventory Engine
-- **Multi-Tier Packaging Conversions**: Outer cartons / bales / cases $\rightarrow$ Inner packs $\rightarrow$ Loose base units with dynamic conversion factors and packaging-specific wholesale pricing (`ProductUnitConversion`).
-- **Returnable Packaging & Empty Containers**:
-  Automatically calculates crate and bottle yields on beverage/gas transactions (`EmptyContainerService`). Fractional yields are safely stored in `fc_outlet_partial_empties` until full units accumulate.
-- **Automated General Ledger Hooks**:
-  - **Purchases (GRN):** `Debit 1300 (Inventory Asset)`, `Credit 2050 (GRNI Clearing / AP)`.
-  - **Sales COGS:** `Debit 5000 (COGS)`, `Credit 1300 (Inventory Asset)`.
-  - **Damage / Spoilage / Shortage:** `Debit 5500 (Shrinkage Expense)`, `Credit 1300 (Inventory Asset)`.
-  - **Stock Count Overage:** `Debit 1300 (Inventory Asset)`, `Credit 5500 (Inventory Adjustment Gain)`.
-- **Location Hierarchy & Backward Compatibility**:
-  `Location` flexibly represents central warehouses, retail outlets, fulfillment depots, and delivery vans (with `Outlet` class alias for 100% backward compatibility).
+Complete inventory management with multi-tier packaging conversions, returnable containers, FIFO batch tracking, and automatic double-entry General Ledger linkages.
 
+#### 1. Multi-Tier Packaging Conversion:
+Define products sold in multiple packaging layers (Carton $\rightarrow$ Inner Pack $\rightarrow$ Piece):
+```php
+use Ongudidan\FortuneCore\Modules\Inventory\Services\InventoryService;
+
+$inventoryService = app(InventoryService::class);
+
+// Product #10 has Base Unit = Piece. Unit #5 = Carton of 24 pieces.
+// Convert 3.5 cartons to loose pieces:
+$pieces = $inventoryService->convertToBase(
+    productId: 10,
+    qty: 3.5,
+    unitId: 5
+); // 84.0 loose pieces
+```
+
+#### 2. Goods Receipt Note (GRN Purchases Intake & GL Posting):
+Intakes stock, creates batch, updates running balance, and writes balanced GL journals:
 ```php
 use Ongudidan\FortuneCore\Modules\Inventory\Services\StockMovementService;
 
 $stockService = app(StockMovementService::class);
 
-// Record physical shortage adjustment (automatically writes balanced GL entries to 1300 and 5500)
-$stockService->applyAdjustment(
+// Intakes 50 cartons at KES 2,400 per carton = KES 120,000
+// Automatically writes balanced General Ledger journals:
+//   Debit 1300 (Inventory Asset) = 120,000
+//   Credit 2050 (GRNI Clearing / Accounts Payable) = 120,000
+$stockService->applyPurchase(
     productId: 10,
-    quantityChange: -5, // 5 bags shortage
-    locationId: 1,
-    movementType: 'deduction',
-    notes: 'Shortage detected during physical stock-taking'
+    quantity: 50,
+    unitCost: 2400.00,
+    locationId: $warehouseId,
+    reference: 'GRN-2026-004'
+);
+```
+
+#### 3. Sales Deduction & COGS GL Posting:
+Relieves stock, consumes FIFO batches, and books COGS:
+```php
+// Sells 10 cartons from retail store #1
+// Automatically writes balanced General Ledger journals:
+//   Debit 5000 (Cost of Goods Sold) = 24,000
+//   Credit 1300 (Inventory Asset) = 24,000
+$stockService->applySale(
+    productId: 10,
+    quantity: 10,
+    locationId: $retailStoreId,
+    reference: 'SALE-1049'
+);
+```
+
+#### 4. Returnable Packaging & Empty Container Yield:
+When beverages or gas cylinders are sold, empty crates and bottles yield into inventory while tracking customer liability:
+```php
+use Ongudidan\FortuneCore\Modules\Inventory\Services\EmptyContainerService;
+
+$containerService = app(EmptyContainerService::class);
+
+// Process empty bottle yield on sale of 10 sodas:
+// - Accumulates fractional empty crates/bottles in fc_outlet_partial_empties
+// - Records movement in fc_empty_container_movements
+// - Increases physical empty container stock in the store
+$yieldResult = $containerService->processSaleYield(
+    locationId: $storeId,
+    productId: $sodaId,
+    variation: $variationModel,
+    quantitySold: 10,
+    customerId: 5
+);
+
+// Customer returns 8 empty bottles:
+$containerService->recordCustomerReturn(
+    customerId: 5,
+    emptyProductId: $emptyBottleId,
+    quantity: 8,
+    locationId: $storeId
+);
+
+// Check remaining empty bottles customer owes:
+$remainingDebt = $containerService->getCustomerContainerBalance(customerId: 5, emptyProductId: $emptyBottleId);
+```
+
+#### 5. Physical Stock-Taking with Carton/Piece Normalization:
+Normalizes physical cartons and loose pieces, computes variance, and writes shrinkage/overage GL entries:
+```php
+use Ongudidan\FortuneCore\Modules\Inventory\Services\RetailStockTakingService;
+
+$stockTakingService = app(RetailStockTakingService::class);
+
+// Step 1: Normalize physical count (e.g., 4 cartons of 24 + 5 loose pieces = 101 pieces)
+$normalizedCount = $stockTakingService->normalizeCounts(
+    productId: 10,
+    packages: 4,
+    looseUnits: 5,
+    packUnitId: 5 // Carton unit ID
+);
+
+// Step 2: Finalize stock-taking session:
+// - Evaluates physical counts vs book system quantities
+// - Records InventoryStockAdjustment records for variances
+// - Automatically writes balanced General Ledger journals:
+//     If Shortage: Debit 5500 (Shrinkage Expense), Credit 1300 (Inventory Asset)
+//     If Overage:  Debit 1300 (Inventory Asset), Credit 5500 (Adjustment Gain)
+$finalized = $stockTakingService->finalizeStockTaking(stockTakingId: 3);
+```
+
+#### 6. Inventory Spoilage / Breakage Write-Offs:
+```php
+use Ongudidan\FortuneCore\Modules\Inventory\Services\InventoryWriteOffService;
+
+$writeOffService = app(InventoryWriteOffService::class);
+
+// Write off 3 damaged cooking oil cartons (Debit 5500, Credit 1300)
+$writeOff = $writeOffService->createWriteOff(
+    locationId: $warehouseId,
+    items: [
+        ['product_id' => 10, 'quantity' => 3, 'unit_cost' => 2400.00]
+    ],
+    reason: 'breakage',
+    notes: 'Damaged in transit by delivery truck'
 );
 ```
 
 ---
 
-## 🎨 Frontend Components (Vue 3 / Inertia)
+### 10. Frontend Vue 3 / Inertia Components Integration
+All frontend components are pre-styled with Tailwind CSS and adhere strictly to enterprise standards:
+- **Axios Ban:** Zero `axios` calls; uses Inertia `router`, `useForm`, or standard `fetch`.
+- **SearchableSelect:** Never uses native `<select>` tags; uses the custom `SearchableSelect.vue`.
 
-The package bundles modern Tailwind CSS Vue 3 components in `resources/js/Components/`:
+#### Publishing Frontend Assets:
+```bash
+php artisan vendor:publish --tag=fortune-vue
+```
 
-- `StockAvailabilityTable.vue`: Real-time stock listing with multi-location filters and low stock alerts
-- `StockTransferModal.vue`: Inter-location transfer composer between warehouses, stores, and vans
-- `StockTakingBreakdownModal.vue`: Physical stock-taking modal with carton + loose units normalization
-- `EmptyContainerReturnModal.vue`: Returnable crate/bottle return ledger with customer debt balance
-- `UnitConversionMatrix.vue`: Dynamic multi-tier packaging matrix (Carton $\rightarrow$ Pack $\rightarrow$ Piece)
-- `TwoFactorChallengeModal.vue`: Authenticator TOTP & Email OTP prompt
-- `PasskeyManager.vue`: WebAuthn Passkeys registration & management
-- `MpesaPaymentModal.vue`: Interactive Daraja STK Push modal with countdown timer
-- `DenominationCounter.vue`: Physical cash counting grid with real-time discrepancy calculation
-- `AccountTransferModal.vue`: Inter-account transfer composer with fee allocation
-- `SingleSmsComposeModal.vue`: Quick SMS modal with character count & GSM segment calculation
-- `SmsTemplateModal.vue`: SMS template editor with live variable tags
-- `BulkSmsDashboard.vue`: Campaign manager, delivery metrics, and provider balance widget
-- `UnallocatedPaymentsTable.vue`: M-Pesa Tier 3 suspense resolution interface
-- `SearchableSelect.vue`: Accessible, searchable select dropdown (strictly adheres to the project standard ban on raw `<select>` tags)
+Components are published to `resources/js/components/fortune/`.
+
+#### Using Components in Your Inertia Pages:
+```vue
+<script setup lang="ts">
+import { ref } from 'vue';
+import StockAvailabilityTable from '@/components/fortune/StockAvailabilityTable.vue';
+import StockTransferModal from '@/components/fortune/StockTransferModal.vue';
+import StockTakingBreakdownModal from '@/components/fortune/StockTakingBreakdownModal.vue';
+import EmptyContainerReturnModal from '@/components/fortune/EmptyContainerReturnModal.vue';
+import UnitConversionMatrix from '@/components/fortune/UnitConversionMatrix.vue';
+import AccountTransferModal from '@/components/fortune/AccountTransferModal.vue';
+import MpesaPaymentModal from '@/components/fortune/MpesaPaymentModal.vue';
+
+const showTransferModal = ref(false);
+const showPaymentModal = ref(false);
+</script>
+
+<template>
+    <div class="p-6 space-y-6">
+        <!-- Live Real-Time Stock Availability Grid -->
+        <StockAvailabilityTable
+            :products="productsList"
+            :locations="locationsList"
+            @transfer="(product) => (showTransferModal = true)"
+        />
+
+        <!-- Inter-Location Stock Transfer Dialog -->
+        <StockTransferModal
+            :open="showTransferModal"
+            :locations="locationsList"
+            :products="productsList"
+            @close="showTransferModal = false"
+            @submit="handleTransferSubmit"
+        />
+
+        <!-- Interactive M-Pesa STK Push Modal with Countdown -->
+        <MpesaPaymentModal
+            :open="showPaymentModal"
+            :amount="1500"
+            reference="INV-1024"
+            @close="showPaymentModal = false"
+            @success="onPaymentCompleted"
+        />
+    </div>
+</template>
+```
 
 ---
 
