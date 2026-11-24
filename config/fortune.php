@@ -3,7 +3,9 @@
 use App\Models\Branch;
 use App\Models\Company;
 use App\Models\Customer;
+use App\Models\InventoryCostAdjustment;
 use App\Models\Purchase;
+use App\Models\PurchaseOrder;
 use App\Models\Sale;
 use App\Models\Supplier;
 use App\Models\User;
@@ -44,6 +46,8 @@ return [
         'product' => env('FORTUNE_PRODUCT_MODEL', 'App\\Models\\Product'),
         'sale' => Sale::class,
         'purchase' => Purchase::class,
+        'purchase_order' => PurchaseOrder::class,
+        'cost_adjustment' => InventoryCostAdjustment::class,
     ],
 
     /*

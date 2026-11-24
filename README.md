@@ -50,6 +50,9 @@ Every module can be independently enabled or disabled via feature toggles in `co
 | **Bulk & System SMS** | TextSMS gateway, automated lifecycle triggers, balance query | SMS campaigns, delivery callbacks |
 | **Financial Reports** | Anomaly audit, suspense statements, vault audit, trial balance, P&L | 10 specialized reporting services |
 | **Wholesale Inventory** | Multi-unit conversion, FIFO batching, empty containers, stock-taking, GL linkage | `1300` (Asset), `5000` (COGS), `5500` (Shrinkage), `2050` (GRNI) |
+| **Sales & POS Checkout** | Multi-tender checkout (Cash, M-Pesa, Wallet), stock relief, empty yield, returns | `4000` (Revenue), `1200` (AR), `1001` (Cash), `1020` (M-Pesa) |
+| **Purchases & Procurement** | Purchase orders, GRN batch intake, AP settlement, supplier advance offset | `1300` (Asset), `2050` (GRNI), `1050` (Advances), `1010` (Bank) |
+| **Inventory Cost Adjustments** | Valuation revaluation on stock on hand, average cost & batch sync, GL gain/loss | `1300` (Asset), `5500` (Inventory Adjustment Gain / Loss) |
 
 ---
 
@@ -733,6 +736,117 @@ $writeOff = $writeOffService->createWriteOff(
 );
 ```
 
+#### 7. Wholesale / Retail Sales Checkout & Multi-Tender Settlements:
+Handles complete checkout with multi-tender split payments (Cash, M-Pesa, Customer Escrow Wallet 2015), atomic FIFO stock relief, empty returnable container yield, and double-entry GL revenue posting:
+```php
+use Ongudidan\FortuneCore\Modules\Inventory\Services\SaleService;
+
+$saleService = app(SaleService::class);
+
+// Process wholesale/retail sale of 5 cartons @ KES 2,500 = KES 12,500
+// Split payment: KES 7,500 Cash, KES 5,000 M-Pesa
+$sale = $saleService->createSale([
+    'location_id' => $storeId,
+    'customer_id' => $customerId, // Optional
+    'items' => [
+        [
+            'product_id' => $productId,
+            'quantity' => 5,
+            'unit_price' => 2500.00,
+            'unit_cost' => 2000.00,
+        ]
+    ],
+    'cash_paid' => 7500.00,
+    'mpesa_paid' => 5000.00,
+    'wallet_paid' => 0.00, // Or spend from Customer Escrow 2015
+    'payment_method' => 'split',
+]);
+
+// Automatically:
+// 1. Relieves inventory stock and updates running balances
+// 2. Adjusts FIFO batches and posts COGS (Debit 5000, Credit 1300)
+// 3. Yields returnable empty containers if enabled (crates/bottles)
+// 4. Posts balanced revenue and tender double-entry:
+//    - Debit 1001 (Cash): KES 7,500
+//    - Debit 1020 (M-Pesa): KES 5,000
+//    - Credit 4000 (Sales Revenue): KES 12,500
+
+// Process a customer sale return (Return Inward):
+$return = $saleService->processReturn(
+    sale: $sale,
+    items: [
+        ['sale_item_id' => $sale->items->first()->id, 'quantity_returned' => 1]
+    ],
+    reason: 'Customer ordered wrong specification'
+);
+```
+
+#### 8. Procurement, Purchase Orders & Goods Receipt (GRN):
+Lifecycle from purchase order creation to physical intake, FIFO batch generation, supplier invoice settlement, and debit notes:
+```php
+use Ongudidan\FortuneCore\Modules\Inventory\Services\PurchaseService;
+
+$purchaseService = app(PurchaseService::class);
+
+// Step 1: Create a Purchase Order
+$po = $purchaseService->createPurchaseOrder([
+    'supplier_id' => $supplierId,
+    'location_id' => $warehouseId,
+    'items' => [
+        [
+            'product_id' => $productId,
+            'quantity_ordered' => 100,
+            'unit_cost' => 2000.00,
+        ]
+    ],
+    'notes' => 'Contract shipment for flour supply',
+]);
+
+// Step 2: Receive Goods at Warehouse (GRN Intake)
+// - Intakes physical stock, creates batch, updates PO status to 'received'
+// - Automatically posts: Debit 1300 (Asset), Credit 2050 (GRNI Clearing)
+$purchase = $purchaseService->receiveGoods($po);
+
+// Step 3: Settle Supplier Bill
+// - Disburses from Bank or offsets against existing Supplier Prepayments (1050)
+$purchaseService->settleSupplierInvoice(
+    purchase: $purchase,
+    amount: 200000.00,
+    paymentMethod: 'bank' // or 'advance' to deduct Supplier Prepayments (1050)
+);
+
+// Step 4: Return Goods to Supplier (Debit Note)
+$return = $purchaseService->processPurchaseReturn(
+    purchase: $purchase,
+    items: [
+        ['product_id' => $productId, 'quantity_returned' => 5, 'unit_cost' => 2000.00]
+    ],
+    reason: 'Damaged packaging from factory'
+);
+```
+
+#### 9. Inventory Cost Revaluation (Adjustments Hub):
+Revalues existing stock on hand, recalculates `average_cost`, updates active batch valuations, logs an immutable cost movement audit, and writes balanced GL lines:
+```php
+use Ongudidan\FortuneCore\Modules\Inventory\Services\CostAdjustmentService;
+
+$costService = app(CostAdjustmentService::class);
+
+// Revalue stock on hand when supplier retroactively updates unit cost
+// e.g., Current average cost was KES 2,000, new cost is KES 2,150 (+150 diff per unit)
+// If 100 units on hand -> KES 15,000 total valuation gain
+$adjustment = $costService->applyCostAdjustment(
+    productId: $productId,
+    newCost: 2150.00,
+    locationId: $warehouseId,
+    reason: 'Supplier invoice price update'
+);
+
+// Automatically posts:
+// - If Gain: Debit 1300 (Inventory Asset), Credit 5500 (Adjustment Gain)
+// - If Loss: Debit 5500 (Revaluation Loss), Credit 1300 (Inventory Asset)
+```
+
 ---
 
 ### 10. Frontend Vue 3 / Inertia Components Integration
@@ -758,9 +872,15 @@ import EmptyContainerReturnModal from '@/components/fortune/EmptyContainerReturn
 import UnitConversionMatrix from '@/components/fortune/UnitConversionMatrix.vue';
 import AccountTransferModal from '@/components/fortune/AccountTransferModal.vue';
 import MpesaPaymentModal from '@/components/fortune/MpesaPaymentModal.vue';
+import SalesCheckoutModal from '@/components/fortune/SalesCheckoutModal.vue';
+import GoodsReceiptModal from '@/components/fortune/GoodsReceiptModal.vue';
+import CostAdjustmentModal from '@/components/fortune/CostAdjustmentModal.vue';
 
 const showTransferModal = ref(false);
 const showPaymentModal = ref(false);
+const showCheckoutModal = ref(false);
+const showGrnModal = ref(false);
+const showCostAdjModal = ref(false);
 </script>
 
 <template>
@@ -772,22 +892,37 @@ const showPaymentModal = ref(false);
             @transfer="(product) => (showTransferModal = true)"
         />
 
-        <!-- Inter-Location Stock Transfer Dialog -->
-        <StockTransferModal
-            :open="showTransferModal"
+        <!-- Wholesale / Retail Checkout with Split Tenders & Container Yield -->
+        <SalesCheckoutModal
+            :show="showCheckoutModal"
+            :items="cartItems"
+            :totalAmount="12500"
+            :customers="customersList"
             :locations="locationsList"
-            :products="productsList"
-            @close="showTransferModal = false"
-            @submit="handleTransferSubmit"
+            :customerWalletBalance="3400"
+            @close="showCheckoutModal = false"
+            @success="onSaleCompleted"
         />
 
-        <!-- Interactive M-Pesa STK Push Modal with Countdown -->
-        <MpesaPaymentModal
-            :open="showPaymentModal"
-            :amount="1500"
-            reference="INV-1024"
-            @close="showPaymentModal = false"
-            @success="onPaymentCompleted"
+        <!-- Goods Receipt Note (GRN) Intake -->
+        <GoodsReceiptModal
+            :show="showGrnModal"
+            :suppliers="suppliersList"
+            :locations="locationsList"
+            :products="productsList"
+            :units="unitsList"
+            @close="showGrnModal = false"
+            @success="onGoodsReceived"
+        />
+
+        <!-- Stock Valuation Revaluation (Cost Adjustment) -->
+        <CostAdjustmentModal
+            :show="showCostAdjModal"
+            :products="productsList"
+            :locations="locationsList"
+            :units="unitsList"
+            @close="showCostAdjModal = false"
+            @success="onCostAdjusted"
         />
     </div>
 </template>
@@ -825,7 +960,7 @@ The package includes a comprehensive PHPUnit test suite covering double-entry in
 composer test
 # or
 ./vendor/bin/phpunit
-# Result: OK (17 tests, 56 assertions)
+# Result: OK (20 tests, 101 assertions)
 ```
 
 Format code with Laravel Pint:

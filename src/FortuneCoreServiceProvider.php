@@ -7,11 +7,14 @@ use Ongudidan\FortuneCore\Console\Commands\ProcessMpesaAutoPullCommand;
 use Ongudidan\FortuneCore\Console\Commands\ProcessMpesaAutoSweepsCommand;
 use Ongudidan\FortuneCore\Console\Commands\ProcessScheduledSmsCampaignsCommand;
 use Ongudidan\FortuneCore\Console\Commands\UpdateSmsDeliveryStatusCommand;
+use Ongudidan\FortuneCore\Modules\Inventory\Services\CostAdjustmentService;
 use Ongudidan\FortuneCore\Modules\Inventory\Services\EmptyContainerService;
 use Ongudidan\FortuneCore\Modules\Inventory\Services\InventoryService;
 use Ongudidan\FortuneCore\Modules\Inventory\Services\InventoryWriteOffService;
 use Ongudidan\FortuneCore\Modules\Inventory\Services\ItemHistoryRebuilderService;
+use Ongudidan\FortuneCore\Modules\Inventory\Services\PurchaseService;
 use Ongudidan\FortuneCore\Modules\Inventory\Services\RetailStockTakingService;
+use Ongudidan\FortuneCore\Modules\Inventory\Services\SaleService;
 use Ongudidan\FortuneCore\Modules\Inventory\Services\StockAvailabilityService;
 use Ongudidan\FortuneCore\Modules\Inventory\Services\StockMovementService;
 use Ongudidan\FortuneCore\Modules\Ledger\Services\AccountingService;
@@ -188,10 +191,33 @@ class FortuneCoreServiceProvider extends ServiceProvider
             $this->app->singleton(InventoryWriteOffService::class, function ($app) {
                 return new InventoryWriteOffService($app->make(StockMovementService::class));
             });
+            $this->app->singleton(SaleService::class, function ($app) {
+                return new SaleService(
+                    $app->make(StockMovementService::class),
+                    $app->make(EmptyContainerService::class),
+                    $app->make(WalletService::class),
+                    $app->make(LedgerService::class)
+                );
+            });
+            $this->app->singleton(PurchaseService::class, function ($app) {
+                return new PurchaseService(
+                    $app->make(StockMovementService::class),
+                    $app->make(WalletService::class),
+                    $app->make(LedgerService::class)
+                );
+            });
+            $this->app->singleton(CostAdjustmentService::class, function ($app) {
+                return new CostAdjustmentService(
+                    $app->make(LedgerService::class)
+                );
+            });
 
             $this->app->alias(InventoryService::class, 'fortune.inventory');
             $this->app->alias(StockMovementService::class, 'fortune.stock');
             $this->app->alias(EmptyContainerService::class, 'fortune.containers');
+            $this->app->alias(SaleService::class, 'fortune.sales');
+            $this->app->alias(PurchaseService::class, 'fortune.purchases');
+            $this->app->alias(CostAdjustmentService::class, 'fortune.cost-adjustments');
         }
     }
 
