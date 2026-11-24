@@ -5,8 +5,8 @@ namespace Ongudidan\FortuneCore\Http\Controllers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Ongudidan\FortuneCore\Models\PaymentAccountTransfer;
-use Ongudidan\FortuneCore\Services\PaymentAccountTransferService;
+use Ongudidan\FortuneCore\Modules\Transfers\Models\PaymentAccountTransfer;
+use Ongudidan\FortuneCore\Modules\Transfers\Services\PaymentAccountTransferService;
 
 class PaymentAccountTransferController extends Controller
 {

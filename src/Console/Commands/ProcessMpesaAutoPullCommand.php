@@ -3,8 +3,8 @@
 namespace Ongudidan\FortuneCore\Console\Commands;
 
 use Illuminate\Console\Command;
-use Ongudidan\FortuneCore\Models\MpesaAutoPullConfig;
-use Ongudidan\FortuneCore\Services\MpesaAutoPullService;
+use Ongudidan\FortuneCore\Modules\Mpesa\Models\MpesaAutoPullConfig;
+use Ongudidan\FortuneCore\Modules\Mpesa\Services\MpesaAutoPullService;
 
 class ProcessMpesaAutoPullCommand extends Command
 {

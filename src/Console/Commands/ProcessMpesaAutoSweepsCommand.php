@@ -3,7 +3,7 @@
 namespace Ongudidan\FortuneCore\Console\Commands;
 
 use Illuminate\Console\Command;
-use Ongudidan\FortuneCore\Services\MpesaAutoSweepService;
+use Ongudidan\FortuneCore\Modules\Mpesa\Services\MpesaAutoSweepService;
 
 class ProcessMpesaAutoSweepsCommand extends Command
 {

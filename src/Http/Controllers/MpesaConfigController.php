@@ -5,8 +5,8 @@ namespace Ongudidan\FortuneCore\Http\Controllers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Ongudidan\FortuneCore\Models\MpesaConfig;
-use Ongudidan\FortuneCore\Services\MpesaConfigService;
+use Ongudidan\FortuneCore\Modules\Mpesa\Models\MpesaConfig;
+use Ongudidan\FortuneCore\Modules\Mpesa\Services\MpesaConfigService;
 
 class MpesaConfigController extends Controller
 {

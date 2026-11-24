@@ -5,7 +5,7 @@ namespace Ongudidan\FortuneCore\Http\Controllers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Ongudidan\FortuneCore\Services\MpesaTransactionService;
+use Ongudidan\FortuneCore\Modules\Mpesa\Services\MpesaTransactionService;
 
 class MpesaWebhookController extends Controller
 {

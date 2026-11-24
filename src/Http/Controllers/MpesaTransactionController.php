@@ -6,8 +6,8 @@ use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Ongudidan\FortuneCore\Models\MpesaTransaction;
-use Ongudidan\FortuneCore\Services\MpesaTransactionService;
+use Ongudidan\FortuneCore\Modules\Mpesa\Models\MpesaTransaction;
+use Ongudidan\FortuneCore\Modules\Mpesa\Services\MpesaTransactionService;
 
 class MpesaTransactionController extends Controller
 {
