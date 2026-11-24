@@ -7,6 +7,13 @@ use Ongudidan\FortuneCore\Console\Commands\ProcessMpesaAutoPullCommand;
 use Ongudidan\FortuneCore\Console\Commands\ProcessMpesaAutoSweepsCommand;
 use Ongudidan\FortuneCore\Console\Commands\ProcessScheduledSmsCampaignsCommand;
 use Ongudidan\FortuneCore\Console\Commands\UpdateSmsDeliveryStatusCommand;
+use Ongudidan\FortuneCore\Modules\Inventory\Services\EmptyContainerService;
+use Ongudidan\FortuneCore\Modules\Inventory\Services\InventoryService;
+use Ongudidan\FortuneCore\Modules\Inventory\Services\InventoryWriteOffService;
+use Ongudidan\FortuneCore\Modules\Inventory\Services\ItemHistoryRebuilderService;
+use Ongudidan\FortuneCore\Modules\Inventory\Services\RetailStockTakingService;
+use Ongudidan\FortuneCore\Modules\Inventory\Services\StockAvailabilityService;
+use Ongudidan\FortuneCore\Modules\Inventory\Services\StockMovementService;
 use Ongudidan\FortuneCore\Modules\Ledger\Services\AccountingService;
 use Ongudidan\FortuneCore\Modules\Ledger\Services\LedgerService;
 use Ongudidan\FortuneCore\Modules\Mpesa\Services\MpesaAutoPullService;
@@ -153,6 +160,38 @@ class FortuneCoreServiceProvider extends ServiceProvider
         // 8. Two-Factor Authentication Module (Powered by ongudidan/laravel-multi-2fa)
         if (config('fortune.modules.two_factor', true) && class_exists(Multi2faServiceProvider::class)) {
             $this->app->register(Multi2faServiceProvider::class);
+        }
+
+        // 9. Wholesale Inventory Engine Module
+        if (config('fortune.modules.inventory', true)) {
+            $this->app->singleton(InventoryService::class, fn () => new InventoryService);
+            $this->app->singleton(StockMovementService::class, function ($app) {
+                return new StockMovementService(
+                    $app->make(InventoryService::class),
+                    $app->make(LedgerService::class)
+                );
+            });
+            $this->app->singleton(StockAvailabilityService::class, fn () => new StockAvailabilityService);
+            $this->app->singleton(EmptyContainerService::class, function ($app) {
+                return new EmptyContainerService(
+                    $app->make(InventoryService::class),
+                    $app->make(StockMovementService::class)
+                );
+            });
+            $this->app->singleton(ItemHistoryRebuilderService::class, fn () => new ItemHistoryRebuilderService);
+            $this->app->singleton(RetailStockTakingService::class, function ($app) {
+                return new RetailStockTakingService(
+                    $app->make(InventoryService::class),
+                    $app->make(StockMovementService::class)
+                );
+            });
+            $this->app->singleton(InventoryWriteOffService::class, function ($app) {
+                return new InventoryWriteOffService($app->make(StockMovementService::class));
+            });
+
+            $this->app->alias(InventoryService::class, 'fortune.inventory');
+            $this->app->alias(StockMovementService::class, 'fortune.stock');
+            $this->app->alias(EmptyContainerService::class, 'fortune.containers');
         }
     }
 

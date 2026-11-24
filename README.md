@@ -27,6 +27,7 @@ Every module can be independently enabled or disabled via feature toggles in `co
   - [6. Double-Entry General Ledger](#6-double-entry-general-ledger)
   - [7. Bulk & System Transactional SMS](#7-bulk--system-transactional-sms)
   - [8. Financial & Reconciliation Reports](#8-financial--reconciliation-reports)
+  - [9. Wholesale & FMCG Inventory Engine](#9-wholesale--fmcg-inventory-engine)
 - [Frontend Components (Vue 3 / Inertia)](#-frontend-components-vue-3--inertia)
 - [Console Commands & Schedulers](#-console-commands--schedulers)
 - [Testing](#-testing)
@@ -47,6 +48,7 @@ Every module can be independently enabled or disabled via feature toggles in `co
 | **Double-Entry General Ledger** | Exact mathematical equality (`debits === credits`), immutable audit trail | Enforced double-entry ledger |
 | **Bulk & System SMS** | TextSMS gateway, automated lifecycle triggers, balance query | SMS campaigns, delivery callbacks |
 | **Financial Reports** | Anomaly audit, suspense statements, vault audit, trial balance, P&L | 10 specialized reporting services |
+| **Wholesale Inventory** | Multi-unit conversion, FIFO batching, empty containers, stock-taking, GL linkage | `1300` (Asset), `5000` (COGS), `5500` (Shrinkage), `2050` (GRNI) |
 
 ---
 
@@ -221,6 +223,11 @@ All migrations use the configurable table prefix (`fc_` by default):
 7. `2026_01_01_000007_create_fortune_ledger_tables.php`: Double-entry journals & items (`fc_journal_entries`, `fc_journal_items`)
 8. `2026_01_01_000008_create_fortune_wallets_tables.php`: Customer wallets, supplier advances, entity ledger
 9. `2026_01_01_000009_create_fortune_sms_tables.php`: SMS configurations, templates, campaigns, logs
+10. `2026_01_01_000010_create_fortune_inventory_catalog_tables.php`: Products, categories, brands, units, variations, packaging unit conversions (`fc_products`, `fc_product_unit_conversions`, etc.)
+11. `2026_01_01_000011_create_fortune_inventory_stock_and_batches_tables.php`: Locations, stock balances, FIFO/AVCO batches, stock and cost movements (`fc_locations`, `fc_product_inventories`, `fc_inventory_batches`, `fc_inventory_stock_movements`, `fc_inventory_cost_movements`)
+12. `2026_01_01_000012_create_fortune_inventory_transfers_and_requests_tables.php`: Inter-location stock requests, transfers, and reversals (`fc_stock_requests`, `fc_stock_transfers`, `fc_stock_transfer_reversals`)
+13. `2026_01_01_000013_create_fortune_inventory_stock_taking_tables.php`: Periodic retail/wholesale physical stock taking, breakdown by packaging, adjustments, and write-offs (`fc_stock_takings`, `fc_stock_taking_items`, `fc_inventory_stock_adjustments`, `fc_inventory_write_offs`)
+14. `2026_01_01_000014_create_fortune_inventory_empty_containers_tables.php`: Empty container yield movements, customer owed balances, and fractional yield accumulators (`fc_empty_container_movements`, `fc_outlet_partial_empties`)
 
 ---
 
@@ -361,12 +368,44 @@ $sms->sendSingle(
 - `SellPaymentReportService`
 - `FinancialSummaryReportService`
 
+### 9. Wholesale & FMCG Inventory Engine
+- **Multi-Tier Packaging Conversions**: Outer cartons / bales / cases $\rightarrow$ Inner packs $\rightarrow$ Loose base units with dynamic conversion factors and packaging-specific wholesale pricing (`ProductUnitConversion`).
+- **Returnable Packaging & Empty Containers**:
+  Automatically calculates crate and bottle yields on beverage/gas transactions (`EmptyContainerService`). Fractional yields are safely stored in `fc_outlet_partial_empties` until full units accumulate.
+- **Automated General Ledger Hooks**:
+  - **Purchases (GRN):** `Debit 1300 (Inventory Asset)`, `Credit 2050 (GRNI Clearing / AP)`.
+  - **Sales COGS:** `Debit 5000 (COGS)`, `Credit 1300 (Inventory Asset)`.
+  - **Damage / Spoilage / Shortage:** `Debit 5500 (Shrinkage Expense)`, `Credit 1300 (Inventory Asset)`.
+  - **Stock Count Overage:** `Debit 1300 (Inventory Asset)`, `Credit 5500 (Inventory Adjustment Gain)`.
+- **Location Hierarchy & Backward Compatibility**:
+  `Location` flexibly represents central warehouses, retail outlets, fulfillment depots, and delivery vans (with `Outlet` class alias for 100% backward compatibility).
+
+```php
+use Ongudidan\FortuneCore\Modules\Inventory\Services\StockMovementService;
+
+$stockService = app(StockMovementService::class);
+
+// Record physical shortage adjustment (automatically writes balanced GL entries to 1300 and 5500)
+$stockService->applyAdjustment(
+    productId: 10,
+    quantityChange: -5, // 5 bags shortage
+    locationId: 1,
+    movementType: 'deduction',
+    notes: 'Shortage detected during physical stock-taking'
+);
+```
+
 ---
 
 ## 🎨 Frontend Components (Vue 3 / Inertia)
 
 The package bundles modern Tailwind CSS Vue 3 components in `resources/js/Components/`:
 
+- `StockAvailabilityTable.vue`: Real-time stock listing with multi-location filters and low stock alerts
+- `StockTransferModal.vue`: Inter-location transfer composer between warehouses, stores, and vans
+- `StockTakingBreakdownModal.vue`: Physical stock-taking modal with carton + loose units normalization
+- `EmptyContainerReturnModal.vue`: Returnable crate/bottle return ledger with customer debt balance
+- `UnitConversionMatrix.vue`: Dynamic multi-tier packaging matrix (Carton $\rightarrow$ Pack $\rightarrow$ Piece)
 - `TwoFactorChallengeModal.vue`: Authenticator TOTP & Email OTP prompt
 - `PasskeyManager.vue`: WebAuthn Passkeys registration & management
 - `MpesaPaymentModal.vue`: Interactive Daraja STK Push modal with countdown timer
@@ -404,12 +443,13 @@ Schedule::command('sms:update-delivery-status')->everyTenMinutes();
 
 ## 🧪 Testing
 
-The package includes a comprehensive PHPUnit test suite covering double-entry integrity, denomination healing, 3-tier M-Pesa matching, and SMS templating:
+The package includes a comprehensive PHPUnit test suite covering double-entry integrity, denomination healing, 3-tier M-Pesa matching, SMS templating, wholesale multi-tier packaging conversions, returnable empty containers, and stock-taking GL linkages:
 
 ```bash
 composer test
 # or
 ./vendor/bin/phpunit
+# Result: OK (17 tests, 56 assertions)
 ```
 
 Format code with Laravel Pint:
@@ -449,12 +489,15 @@ php artisan db:seed --class="Ongudidan\FortuneCore\Database\Seeders\SystemSmsTem
 
 ## 3. CONFIGURE FEATURE TOGGLES & MODELS
 In `config/fortune.php`:
-1. Verify which modules to enable (`security_2fa`, `payments`, `wallets`, `transfers`, `mpesa`, `ledger`, `sms`, `reports`).
+1. Verify which modules to enable (`security_2fa`, `payments`, `wallets`, `transfers`, `mpesa`, `ledger`, `sms`, `reports`, `inventory`).
 2. Map host models:
    - `'user' => App\Models\User::class`
    - `'customer' => App\Models\Customer::class`
    - `'supplier' => App\Models\Supplier::class`
+   - `'location' => App\Models\Outlet::class`
+   - `'product' => App\Models\Product::class`
    - `'sale' => App\Models\Sale::class`
+   - `'purchase' => App\Models\Purchase::class`
 
 ## 4. UI RULES & FRONTEND COMPLIANCE
 - **SearchableSelect**: Never use native `<select>` tags. Always use `SearchableSelect.vue`.

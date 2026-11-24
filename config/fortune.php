@@ -26,6 +26,7 @@ return [
         'ledger' => env('FORTUNE_LEDGER_ENABLED', true),
         'sms' => env('FORTUNE_SMS_ENABLED', true),
         'reports' => env('FORTUNE_REPORTS_ENABLED', true),
+        'inventory' => env('FORTUNE_INVENTORY_ENABLED', true),
     ],
 
     /*
@@ -39,8 +40,29 @@ return [
         'supplier' => Supplier::class,
         'company' => Company::class,
         'branch' => Branch::class,
+        'location' => env('FORTUNE_LOCATION_MODEL', 'App\\Models\\Outlet'),
+        'product' => env('FORTUNE_PRODUCT_MODEL', 'App\\Models\\Product'),
         'sale' => Sale::class,
         'purchase' => Purchase::class,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Wholesale Inventory Engine Settings
+    |--------------------------------------------------------------------------
+    */
+    'inventory' => [
+        'enable_empty_containers' => env('FORTUNE_INVENTORY_CONTAINERS', true),
+        'valuation_method' => env('FORTUNE_INVENTORY_VALUATION', 'fifo'), // fifo, avco
+        'default_packaging_unit' => 'Carton',
+        'default_base_unit' => 'Piece',
+        'accounts' => [
+            'inventory_asset' => '1300',
+            'cogs' => '5000',
+            'shrinkage_expense' => '5500',
+            'grni_clearing' => '2050',
+        ],
+        'low_stock_threshold' => 10,
     ],
 
     /*
@@ -59,6 +81,10 @@ return [
         'customer_wallet' => '2015',
         'unallocated_suspense' => '2016',
         'sales_revenue' => '4000',
+        'cogs' => '5000',
+        'inventory_asset' => '1300',
+        'shrinkage_expense' => '5500',
+        'grni_clearing' => '2050',
         'transaction_charges' => '6000',
     ],
 

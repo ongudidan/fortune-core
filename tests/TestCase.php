@@ -48,19 +48,10 @@ abstract class TestCase extends BaseTestParent
 
     protected function setUpDatabase(): void
     {
-        $migrations = [
-            __DIR__.'/../database/migrations/2026_01_01_000001_create_fortune_accounts_table.php',
-            __DIR__.'/../database/migrations/2026_01_01_000002_create_fortune_denominations_table.php',
-            __DIR__.'/../database/migrations/2026_01_01_000003_create_fortune_transactions_and_transfers_table.php',
-            __DIR__.'/../database/migrations/2026_01_01_000004_create_fortune_wallets_and_ledgers_table.php',
-            __DIR__.'/../database/migrations/2026_01_01_000005_create_fortune_mpesa_tables.php',
-            __DIR__.'/../database/migrations/2026_01_01_000006_create_fortune_journal_entries_table.php',
-            __DIR__.'/../database/migrations/2026_01_01_000007_create_fortune_cheque_clearances_table.php',
-            __DIR__.'/../database/migrations/2026_01_01_000008_create_fortune_cash_drawer_sessions_table.php',
-            __DIR__.'/../database/migrations/2026_01_01_000009_create_fortune_sms_tables.php',
-        ];
+        $migrationFiles = glob(__DIR__.'/../database/migrations/*.php');
+        sort($migrationFiles);
 
-        foreach ($migrations as $migrationFile) {
+        foreach ($migrationFiles as $migrationFile) {
             if (file_exists($migrationFile)) {
                 $migration = require $migrationFile;
                 $migration->up();

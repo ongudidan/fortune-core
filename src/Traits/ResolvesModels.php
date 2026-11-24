@@ -43,4 +43,14 @@ trait ResolvesModels
     {
         return static::modelClass('purchase');
     }
+
+    public static function getLocationModel(): string
+    {
+        return static::modelClass('location');
+    }
+
+    public static function getProductModel(): string
+    {
+        return static::modelClass('product');
+    }
 }
