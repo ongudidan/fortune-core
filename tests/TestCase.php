@@ -25,6 +25,10 @@ abstract class TestCase extends BaseTestParent
             $this->withoutExceptionHandling();
         }
 
+        if (! $this->app->providerIsLoaded(FortuneCoreServiceProvider::class)) {
+            $this->app->register(FortuneCoreServiceProvider::class);
+        }
+
         $this->setUpDatabase();
     }
 
